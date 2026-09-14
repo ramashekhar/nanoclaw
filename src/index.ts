@@ -12,6 +12,7 @@ import {
   MAX_MESSAGES_PER_PROMPT,
   ONECLI_URL,
   POLL_INTERVAL,
+  STORE_DIR,
   TIMEZONE,
 } from './config.js';
 import './channels/index.js';
@@ -739,7 +740,46 @@ const isDirectRun =
   new URL(import.meta.url).pathname ===
     new URL(`file://${process.argv[1]}`).pathname;
 
+const PID_FILE = path.join(STORE_DIR, 'nanoclaw.pid');
+
+// Refuse to start a second instance — a stray duplicate process races the
+// real one for messages/tasks, causing double replies and stuck queues.
+function acquireSingleInstanceLock(): void {
+  if (fs.existsSync(PID_FILE)) {
+    const existingPid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10);
+    if (existingPid && existingPid !== process.pid) {
+      try {
+        process.kill(existingPid, 0);
+        logger.fatal(
+          { existingPid },
+          'Another NanoClaw instance is already running — refusing to start',
+        );
+        process.exit(1);
+      } catch {
+        // Stale pidfile — previous process is gone, safe to take over.
+      }
+    }
+  }
+  fs.mkdirSync(STORE_DIR, { recursive: true });
+  fs.writeFileSync(PID_FILE, String(process.pid));
+  const releaseLock = () => {
+    try {
+      if (fs.readFileSync(PID_FILE, 'utf8').trim() === String(process.pid)) {
+        fs.unlinkSync(PID_FILE);
+      }
+    } catch {
+      // Already gone.
+    }
+  };
+  process.on('exit', releaseLock);
+  // Node only runs 'exit' handlers on a bare SIGTERM/SIGINT if the signal is
+  // explicitly caught — otherwise the process dies immediately, no cleanup.
+  process.on('SIGTERM', () => process.exit(0));
+  process.on('SIGINT', () => process.exit(0));
+}
+
 if (isDirectRun) {
+  acquireSingleInstanceLock();
   main().catch((err) => {
     logger.error({ err }, 'Failed to start NanoClaw');
     process.exit(1);

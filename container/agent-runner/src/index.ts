@@ -394,6 +394,7 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
+      ...(process.env.NANOCLAW_MODEL ? { model: process.env.NANOCLAW_MODEL } : {}),
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
@@ -473,6 +474,18 @@ interface ScriptResult {
 
 const SCRIPT_TIMEOUT_MS = 30_000;
 
+// Precheck scripts hit arbitrary public hosts (e.g. github.com) and need no
+// injected credentials, so strip the OneCLI gateway proxy/CA env — otherwise
+// requests to hosts outside the gateway's allowlist fail silently.
+function stripGatewayEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (/proxy|ssl_cert|_ca_|^ca_|cert_file/i.test(key)) continue;
+    result[key] = value;
+  }
+  return result;
+}
+
 async function runScript(script: string): Promise<ScriptResult | null> {
   const scriptPath = '/tmp/task-script.sh';
   fs.writeFileSync(scriptPath, script, { mode: 0o755 });
@@ -481,7 +494,7 @@ async function runScript(script: string): Promise<ScriptResult | null> {
     execFile('bash', [scriptPath], {
       timeout: SCRIPT_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
-      env: process.env,
+      env: stripGatewayEnv(process.env),
     }, (error, stdout, stderr) => {
       if (stderr) {
         log(`Script stderr: ${stderr.slice(0, 500)}`);
