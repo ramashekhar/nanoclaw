@@ -39,26 +39,22 @@ container, confirm the app still connects.
 
 ## Reliability
 
-### Find and prevent the source of the duplicate nanoclaw process
+### ~~Find and prevent the source of the duplicate nanoclaw process~~ — CLOSED 2026-09-18
 **Context:** On 2026-09-14, a second `node dist/index.js` process was found
-running outside systemd's tracking (parent PID 1 — meaning it wasn't
-spawned by systemd, cron, `crontab -l`, `/etc/cron.d`, pm2, or nodemon; none
-of those were found on inspection). It raced the systemd-managed instance
-for the same due tasks and Telegram messages, causing duplicate replies and
-a stuck message queue — this is likely what made "hi" go unanswered and
-delayed the GitHub-trending retest earlier that day. It recurred at least
-three times (15:38, 15:48, 16:46) during the session, always shortly after a
-`systemctl --user restart nanoclaw`, but the actual trigger was never
-identified.
+running outside systemd's tracking, racing the systemd-managed instance for
+the same due tasks and Telegram messages, causing duplicate replies and a
+stuck message queue. A pidfile-based single-instance lock was added
+(`src/index.ts:acquireSingleInstanceLock`) to contain the damage, but the
+actual source stayed unidentified.
 
-A pidfile-based single-instance lock was added
-(`src/index.ts:acquireSingleInstanceLock`) so a second instance now refuses
-to start and logs `Another NanoClaw instance is already running`. This
-contains the damage but doesn't explain the root cause.
-**Fix:** next time this fires, check the FATAL log line's timestamp against
-shell history / auth logs / any external orchestration (Ansible, deploy
-scripts, a forgotten `tmux` session) on the host to identify what's
-launching it.
+**Resolved 2026-09-18:** root cause was a second, system-level
+`nanoclaw.service` at `/etc/systemd/system/nanoclaw.service`
+(`WantedBy=multi-user.target`, starts on boot), separate from the
+documented user-level unit at `~/.config/systemd/user/nanoclaw.service`.
+Both auto-started and had been racing each other since whenever the system
+unit was installed. Disabled with `sudo systemctl disable --now nanoclaw`,
+keeping only the user-level unit. The pidfile lock stays in place as a
+safety net but is no longer needed to survive this specific conflict.
 
 ### Silent failures in scheduled-task precheck scripts
 **Context:** The precheck-script mechanism (`runScript` in

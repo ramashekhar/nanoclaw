@@ -1,5 +1,32 @@
 # Dev Log
 
+## 2026-09-18
+
+### Found the real source of the duplicate-process bug: two systemd units
+
+The duplicate-process issue from 2026-09-14 (logged below) kept recurring —
+the pidfile lock added that day was correctly blocking a rogue instance
+every ~5-6 seconds, but the retries never stopped. Root cause: a
+**second, system-level** `nanoclaw.service` existed at
+`/etc/systemd/system/nanoclaw.service` (`WantedBy=multi-user.target`,
+starts on boot), completely separate from the documented user-level one at
+`~/.config/systemd/user/nanoclaw.service`. Both auto-start — the system one
+on boot, the user one via `loginctl` linger (enabled) — and have been
+racing each other since whenever the system unit first got installed. The
+~5.6s retry cadence matched `RestartSec=5` on both units.
+
+The pidfile lock (added 2026-09-14) did its job the whole time — it kept
+the loser from ever corrupting state — but the underlying conflict was
+invisible until directly comparing `systemctl status` output against
+`systemctl --user status`.
+
+Fixed by disabling the system-level unit (`sudo systemctl disable --now
+nanoclaw`), keeping only the user-level one, which is what this repo's
+CLAUDE.md documents as the supported way to run it. No code change needed.
+
+**Backlog item closed:** "Find and prevent the source of the duplicate
+nanoclaw process" — root cause identified and removed.
+
 ## 2026-09-14
 
 ### Daily GitHub-trending email went silent
