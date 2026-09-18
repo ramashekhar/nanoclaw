@@ -49,12 +49,27 @@ that bypass the standard `ufw`/INPUT chain).
 Postgres (`5432`) was left on `127.0.0.1`-only from the 2026-09-14 change —
 nothing needs bridge access to it, so no iptables rule was needed there.
 
-### Rotate OneCLI postgres credentials
+### ~~Rotate OneCLI postgres credentials~~ — CLOSED 2026-09-18
 **Context:** `POSTGRES_USER`/`POSTGRES_PASSWORD` default to `onecli`/`onecli`
 in the compose file and were never overridden. The DB was reachable from the
-public internet (see above) for an unknown period before this was caught.
-**Fix:** set real credentials via `~/.onecli/.env`, recreate the postgres
-container, confirm the app still connects.
+public internet for an unknown period before this was caught (see above,
+now firewalled).
+
+**Resolved 2026-09-18:** generated a random 32-char password,
+`ALTER USER onecli WITH PASSWORD '...'` live via `psql` inside
+`onecli-postgres-1` (no downtime — the running role's password changes
+immediately, no data touched). Wrote the same value to
+`~/.onecli/.env` (`chmod 600`) as `POSTGRES_PASSWORD`, since compose reads
+that file for `${POSTGRES_PASSWORD}` substitution into the app's
+`DATABASE_URL` — note this is a *different* file from `/home/admin/.env`,
+which is the app container's separate `env_file:` for its own runtime
+vars. Recreated both containers with `docker compose up -d`; postgres's
+existing data volume persisted untouched (the `POSTGRES_PASSWORD` env var
+only matters at first-time `initdb`, not on restart of an already
+initialized volume — the live `ALTER USER` is what actually took effect).
+Verified: gateway came up healthy, app reconnected with the new
+credentials, and a live scheduled-task run completed successfully
+end-to-end afterward.
 
 ## Reliability
 
