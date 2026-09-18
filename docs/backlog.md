@@ -2,33 +2,52 @@
 
 ## Security
 
-### Close OneCLl gateway's public exposure properly
+### ~~Close OneCLI gateway's public exposure properly~~ — CLOSED 2026-09-18
 **Context:** `~/.onecli/docker-compose.yml` publishes `onecli-app-1` on
-`10254`/`10255` and postgres on `5432`, all bound to `0.0.0.0`. On
-2026-09-14 this was found being actively abused as an open relay by
-internet scanners (gateway logs showed tunneled traffic to random hosts —
-mail servers, AWS sign-in, a VPN API — for peers that have nothing to do
-with this setup). That abuse exhausted the gateway's file descriptors and
-crashed it on 2026-09-13, which is what silently broke the daily
-GitHub-trending email. Full incident in `docs/dev-log.md` (2026-09-14).
+`10254`/`10255` (and postgres on `5432`) bound to `0.0.0.0`. First found
+2026-09-14 being actively abused as an open relay by internet scanners
+(gateway logs showed tunneled traffic to random hosts — mail servers, AWS
+sign-in, a VPN API — for peers that have nothing to do with this setup).
+That abuse exhausted the gateway's file descriptors and crashed it, which
+silently broke the daily GitHub-trending email — twice: once around
+2026-09-13, and again by 2026-09-14T22:32 UTC (crashed and stayed dead for
+4 days before being noticed on 2026-09-18). Full incidents in
+`docs/dev-log.md`.
 
-Rebinding the app ports to `127.0.0.1` was tried and reverted — it also
-blocks NanoClaw's own containers, since they reach the host via
-`host.docker.internal` (the Docker bridge IP), not true loopback. Ports are
-back on `0.0.0.0` right now, i.e. **the exposure is currently still open**.
+Rebinding the app ports to `127.0.0.1` was tried on 2026-09-14 and reverted
+— it also blocks NanoClaw's own containers, since they reach the host via
+`host.docker.internal` (the Docker bridge IP), not true loopback.
 
-**Fix:** add `DOCKER-USER` iptables rules restricting 10254/10255 (and 5432,
-if it needs bridge access — currently it doesn't and can likely stay
-`127.0.0.1`-only) to the Docker bridge subnet plus localhost, dropping
-everything else. Needs `sudo`, which wasn't available in the session that
-found this. Rough shape:
+**Resolved 2026-09-18** with `DOCKER-USER` iptables rules instead of a
+port-bind change — ports stay on `0.0.0.0` (needed for container access)
+but the host firewall now only accepts 10254/10255 from `127.0.0.1` and
+`172.16.0.0/12` (covers Docker's default bridge `172.17.0.0/16` and the
+`onecli_onecli` bridge `172.21.0.0/16`), dropping everything else:
 ```
 sudo iptables -I DOCKER-USER -p tcp --dport 10254 -s 172.16.0.0/12 -j ACCEPT
-sudo iptables -I DOCKER-USER -p tcp --dport 10254 -j DROP
-# repeat for 10255
+sudo iptables -I DOCKER-USER -p tcp --dport 10254 -s 127.0.0.1 -j ACCEPT
+sudo iptables -A DOCKER-USER -p tcp --dport 10254 -j DROP
+# same for 10255
+sudo netfilter-persistent save   # survive reboot
 ```
-Verify container agents can still reach the gateway after applying (rerun
-the GitHub-trending task and confirm a real, non-error result).
+**Gotcha hit during setup:** `-I` (insert at head) run multiple times in
+sequence pushes each new rule above the last, so the `DROP` rules ended up
+evaluated *before* the `ACCEPT` rules — silently blocking all traffic,
+including legitimate container access. Fixed by deleting the `DROP` rules
+and re-adding them with `-A` (append) so they land after the `ACCEPT`
+rules. Always verify with `iptables -L DOCKER-USER -n --line-numbers`
+after writing multi-rule chains — order determines behavior, not intent.
+
+Verified with a live retest of the GitHub-trending task after applying:
+real email sent, 187s runtime, no error.
+
+`installing iptables-persistent` removed `ufw` as an automatic dependency
+conflict resolution — not a concern, since `ufw` was already confirmed not
+to affect Docker-published ports (Docker writes its own iptables rules
+that bypass the standard `ufw`/INPUT chain).
+
+Postgres (`5432`) was left on `127.0.0.1`-only from the 2026-09-14 change —
+nothing needs bridge access to it, so no iptables rule was needed there.
 
 ### Rotate OneCLI postgres credentials
 **Context:** `POSTGRES_USER`/`POSTGRES_PASSWORD` default to `onecli`/`onecli`

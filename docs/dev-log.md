@@ -2,6 +2,32 @@
 
 ## 2026-09-18
 
+### Gateway crashed again from open-relay abuse — firewalled it properly this time
+
+Scheduled emails stopped again, same `ECONNREFUSED`/`API Error: Unable to
+connect to API` symptom as 2026-09-13. `onecli-app-1` was `unhealthy`.
+Checked its logs: same pattern as before — tunneling traffic for random
+external peers (`pop3.web.de`, `imap.web.de`, `icanhazip.com`,
+`discord.com`, AWS sign-in) with zero relation to this setup, ending in
+`Error: No file descriptors available (os error 24)`. Timestamp on the
+last log line: 2026-09-14T22:32:29Z — the gateway had been dead for **four
+days** before this was noticed, because nothing alerts on it (see the
+Observability item in `docs/backlog.md`).
+
+This is the same root issue flagged as unresolved after the 2026-09-14
+incident: the 2026-09-14 fix reverted the gateway's ports back to
+`0.0.0.0` (public) to unblock container access, with a firewall fix
+promised but not applied that session (no `sudo` available). Restarted the
+gateway to restore service immediately, then applied the actual fix —
+`DOCKER-USER` iptables rules restricting 10254/10255 to localhost + the
+Docker bridge subnet, persisted with `netfilter-persistent`. Full detail
+and the rule-ordering gotcha hit along the way are in the now-closed
+backlog item.
+
+Verified end-to-end: retriggered the GitHub-trending task, got a real
+email with real content, 187s runtime, no error — matching pre-incident
+behavior.
+
 ### Found the real source of the duplicate-process bug: two systemd units
 
 The duplicate-process issue from 2026-09-14 (logged below) kept recurring —
